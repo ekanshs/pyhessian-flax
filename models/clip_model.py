@@ -10,8 +10,6 @@ from transformers import (AutoConfig,
                           FlaxCLIPVisionModel
                           )
 
-from data.templates import get_templates
-from data.input_pipeline import get_dataset_info
 import tqdm
 
 ModuleDef=Any
@@ -104,59 +102,4 @@ def ViTL14(*, num_classes, dtype, **kwargs):
                                         vision_module=vision_module, 
                                         config=model_config,
                                         dtype=dtype)
-
-def get_zero_shot_params(model_name, dataset=None, datasets=None):
-  assert (dataset is not None) or (datasets is not None)
-  model = FlaxCLIPModel.from_pretrained(model_name)
-  tokenizer = FlaxCLIPModel.from_pretrained(model_name)
-  if dataset is not None:
-    return _get_zero_shot_params(model, tokenizer, dataset)
-  return _get_multihead_zero_shot_params(model, tokenizer, datasets)
-
-
-def _get_zero_shot_params(model, tokenizer, dataset_name):
-  classifier_params = _build_zero_shot_classification_params(model, tokenizer, dataset_name)
-  params = {
-    'encoder': {'vision_model': model.params['vision_model']}, 
-    'visual_projection': model.params['visual_projection'],
-    'classifier': {'Dense_0': {'kernel': classifier_params}}, 
-    'logit_scale': model.params['logit_scale'],
-  }
-  
-  return params
-
-def _get_multihead_zero_shot_params(model, tokenizer, dataset_name_ls):
-  classifier_params_ls = []
-  classifier_params_ls = [_build_zero_shot_classification_params(model, tokenizer, dataset_name) for dataset_name in dataset_name_ls]
-
-  params = {
-    'encoder': {'vision_model': model.params['vision_model']}, 
-    'visual_projection': model.params['visual_projection'],
-    'classifier': {f'Dense_{i}': {'kernel': classifier_params_ls[i]} for i in range(len(dataset_name_ls))} , 
-    'logit_scale': model.params['logit_scale']
-  }
-  return params
-
-def _build_zero_shot_classification_params(model, tokenizer, dataset_name):
-  template = get_templates(dataset_name)
-
-  d_info = get_dataset_info(dataset_name, 'train')
-  
-  print('Building classification head.')
-  zeroshot_classifier_params = []
-  for class_id in tqdm(range(d_info['num_classes'])):
-      texts = []
-      for t in template:
-          texts.append(t(d_info['int2str'](class_id)))
-      
-      inputs = tokenizer(text=texts, return_tensors="np", padding=True)
-      embeddings = model.get_text_features(**inputs) # embed with text encoder
-      
-      embeddings /= jnp.linalg.norm(embeddings, axis=-1, keepdims=True)
-      embeddings = embeddings.mean(axis=0)
-      embeddings /= jnp.linalg.norm(embeddings, axis=-1, keepdims=True)
-      zeroshot_classifier_params.append(embeddings)
-
-  zeroshot_classifier_params = jnp.stack(zeroshot_classifier_params, axis=1)
-  return zeroshot_classifier_params
 
